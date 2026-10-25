@@ -1,1 +1,151 @@
+from datetime import datetime
+from pathlib import Path
+import torch
+from torch import autograd
+
+
+def create_real_labels(batch_size: int, device: torch.device) -> torch.Tensor:
+    return torch.ones((batch_size, 1), dtype=torch.float32, device=device)
+
+def create_fake_labels(batch_size: int, device: torch.device) -> torch.Tensor:
+    return torch.zeros((batch_size, 1), dtype=torch.float32, device=device)
+
+def save_model(model: torch.nn.Module, path: Path):
+    torch.save(model.state_dict(), path)
+
+def current_time() -> str:
+    return str(datetime.now().strftime('%Y-%m-%d %H_%M_%S'))
+
+
+class Train:
+    def __init__(
+            self,
+            generator: torch.nn.Module,
+            discriminator: torch.nn.Module,
+            classifier: torch.nn.Module,
+            classifier2: torch.nn.Module,
+            g_optim,
+            d_optim,
+            c_optim,
+            c2_optim,
+            device: torch.device,
+            class_loss
+    ):
+        self._generator = generator
+        self._discriminator = discriminator
+        self._classifier = classifier
+        self._classifier2 = classifier2
+        self._g_optim = g_optim
+        self._d_optim = d_optim
+        self._c_optim = c_optim
+        self._c2_optim = c2_optim
+        self.device = device
+        self.class_loss = class_loss
+
+    @property
+    def generator(self):
+        return self._generator
+
+    @property
+    def discriminator(self):
+        return self._discriminator
+
+    @property
+    def classifier(self):
+        return self._classifier
+
+    def classifier2(self):
+        return self._classifier2
+
+    def gen_requires_grad(self, requires_grad):
+        for p in self._generator.parameters():
+            p.requires_grad = requires_grad
+
+    def dis_requires_grad(self, requires_grad):
+        for p in self._discriminator.parameters():
+            p.requires_grad = requires_grad
+
+    def generator_zero_grad(self):
+        for param in self._generator.parameters():
+            param.grad = None
+
+    def discriminator_zero_grad(self):
+        for param in self._discriminator.parameters():
+            param.grad = None
+
+    def classifier_zero_grad(self):
+        for param in self._classifier.parameters():
+            param.grad = None
+
+    def classifier2_zero_grad(self):
+        for param in self._classifier2.parameters():
+            param.grad = None
+
+    def train_dis_with_real_data_ic(self, data, labels, fake_labels, epochs):
+        if epochs <= 3000:
+            _source = self._discriminator(data, labels)
+            source_loss = _source
+            dis_real_loss = source_loss.mean()
+        else:
+            _source, _class, _class2 = self._discriminator(data, labels), self._classifier(
+                data), self._classifier2(data)
+            source_loss = _source
+            class_loss_df = (self.class_loss(_class, labels) + self.class_loss(_class2, fake_labels)) * 0.5
+            dis_real_loss = source_loss.mean() - class_loss_df
+        return dis_real_loss
+
+    def train_dis_with_fake_data_ic(self, fake_data, fake_classes, fake_labels, epochs):
+        if epochs <= 3000:
+            _source = self._discriminator(fake_data, fake_classes)
+            source_loss = _source
+            source_fake_loss = source_loss.mean()
+            class_loss_df = 0
+            dis_fake_loss = source_fake_loss
+        else:
+            _source, _class, _class2 = self._discriminator(fake_data, fake_classes), self._classifier(fake_data), self._classifier2(fake_data)
+            source_loss = _source
+            source_fake_loss = source_loss.mean()
+            class_loss_df = (self.class_loss(_class, fake_classes) + self.class_loss(_class2, fake_labels)) * 0.5
+            dis_fake_loss = source_fake_loss + class_loss_df
+
+        return dis_fake_loss, source_fake_loss, class_loss_df
+
+
+    def train_generator_ic(self, fake_data, fake_classes, fake_labels, epochs):
+        if epochs <= 4000:
+            class_loss_gf = 0
+            _source = self._discriminator(fake_data, fake_classes)
+            source_loss = _source
+            gen_loss = -source_loss.mean()
+        else:
+            _source, _class, _class2 = self._discriminator(fake_data, fake_classes), self._classifier(fake_data), self._classifier2(fake_data)
+            source_loss = _source
+            class_loss_gf = self.class_loss(_class, fake_classes) * 0.55 + self.class_loss(_class2, fake_labels) * 0.45
+            gen_loss = -source_loss.mean() + class_loss_gf
+        gen_loss.backward()
+        return gen_loss, class_loss_gf
+
+    def calculate_gradient_penalty(self, data, real_labels, fake_data, out_features: int, device):
+        eta = torch.FloatTensor(len(data), out_features).uniform_(0, 1)
+        eta = eta.to(device=device)
+        # define it to calculate gradient
+        interpolated = (eta * data + ((1 - eta) * fake_data)).requires_grad_(True)
+        interpolated = interpolated.to(device=device)
+
+        # calculate probability of interpolated examples
+        prob_interpolated = self._discriminator(interpolated, real_labels)
+
+        # calculate gradients of probabilities with respect to examples
+        gradients = autograd.grad(outputs=prob_interpolated, inputs=interpolated,
+                                  grad_outputs=torch.ones(
+                                      prob_interpolated.size()).to(device=device),
+                                  create_graph=True, retain_graph=True)[0]
+
+        # flatten the gradients to it calculates norm batchwise
+        gradients = gradients.view(gradients.size(0), -1)
+        grad_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * 10
+
+        return grad_penalty
+
+
 
