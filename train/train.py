@@ -6,7 +6,7 @@ from torch import optim
 import config as cf
 from dataloader import GeneDataset, create_dataloader
 from models.MACGAN_LG import Generator, CDiscriminator, Auxiliary_Classifier, Auxiliary_Classifier2
-from train.train_utils2 import Train, save_model, current_time
+from train.utils import Train, save_model, current_time
 
 
 if __name__ == '__main__':
@@ -71,9 +71,9 @@ if __name__ == '__main__':
     )
 
     def label_transform(labels: torch.Tensor) -> torch.Tensor:
-        # 初始化输出张量
+        
         transformed_labels = torch.zeros((labels.size(0), 1), dtype=torch.float32)
-        # 对每一行进行转换
+        
         for i in range(labels.size(0)):
             label = labels[i]
             if torch.equal(label, torch.tensor([1.0])):
